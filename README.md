@@ -1,50 +1,66 @@
 # Prediksi Harga Rumah Jabodetabek
 
-Proyek end-to-end machine learning untuk memprediksi harga jual rumah
-di Jabodetabek dari data listing properti.
+Model untuk menaksir harga rumah di Jabodetabek dari luas tanah, luas bangunan, jumlah kamar, lokasi, dan beberapa atribut lain. Datanya iklan rumah123.com tahun 2022 (Kaggle, nafisbarizki), 3.553 listing.
 
-> Demo: (diisi setelah deploy)
+> Demo: menyusul setelah deploy
 
-## 1. Tujuan
-Satu-dua kalimat: model memprediksi harga jual rumah tinggal
-berdasarkan lokasi, luas tanah, luas bangunan, jumlah kamar, dll.
-Sebutkan siapa yang terbantu (pembeli, agen, investor).
+## Hasil singkat
 
-## 2. Dataset
-- Sumber: Kaggle "Daftar Harga Rumah Jabodetabek" (nafisbarizki),
-  hasil scraping rumah123.com tahun 2022
-- Ukuran awal: 3553 baris, 27 kolom
-- Ukuran setelah cleaning: 3424 baris, 24 kolom
-- Catatan: harga adalah harga listing (permintaan penjual), bukan harga transaksi
+Model akhir XGBoost. Di data test (639 rumah yang tidak dipakai sama sekali selama pemilihan model):
 
-## 3. Struktur folder
-(tempel struktur folder kamu: data/raw, data/processed, notebook, src, app, models)
+| Metrik | Nilai |
+|---|---|
+| Rata-rata meleset (MAPE) | 20,3% |
+| Median meleset | 13,3% |
+| Rumah dengan tebakan meleset ≤ 20% | 65,9% |
 
-## 4. Cleaning (notebook/02_cleaning.ipynb)
-Tabel: langkah | alasan | baris terbuang
-- Duplikat | iklan sama terhitung dua kali | 79
-- Properti komersial (kos, hotel, guest house) | bukan rumah tinggal, kamar membengkak | 20
-- Oper kredit / take over | harga bukan harga pasar | 10
-- Lelang | harga bukan harga pasar | 5
-- Salah ketik (luas bangunan < 10, rasio harga tidak masuk akal, dll.) | sisanya
-- Total dibuang: 129 baris
-- Kolom dibuang: lat/long (hanya titik tengah kecamatan, bukan lokasi presisi),
-  year_built (duplikat building_age), 3 kolom turunan harga per m²
-  (berisiko data leakage)
+Hasil test mirip dengan cross-validation (21,9%), jadi model tidak sekadar menghafal data latih.
 
-(Cocokkan angka per langkah dengan log di notebook kamu.)
+## Yang saya pelajari dari proyek ini
 
-## 5. Temuan EDA (notebook/03_eda.ipynb)
-3-5 poin, masing-masing satu kalimat. Contoh yang sudah kamu temukan:
-- Harga sangat miring ke kanan (skewness 11,85), jadi di-log menjadi 0,69
-- Luas bangunan dan jumlah kamar mandi berkorelasi kuat dengan log harga
-- Missing value terbesar: building_orientation (~46%) dan building_age (~41%)
-Tambahkan 1-2 gambar grafik dengan ![](path/gambar.png)
+**Seperempat data test ternyata "bocoran".** Banyak rumah yang sama diiklankan ulang oleh agen berbeda dengan judul lain, tapi semua spesifikasi dan harganya identik. Duplikat biasa tidak menangkapnya. Kalau dibiarkan, hampir seperempat rumah di test punya "kembaran" di train (kecamatan, harga, luas, dan jumlah kamar sama), sehingga skor model jadi terlalu optimis. Saya buang 251 iklan ulang yang identik, lalu split dan cross-validation dilakukan per grup (`GroupShuffleSplit`, `GroupKFold`) supaya rumah yang mirip kembar tidak terpisah ke train dan test.
 
-## 6. Keterbatasan (isi sambil jalan)
-- Harga listing 2022, bukan transaksi
-- Lokasi hanya level kecamatan
-- Sebagian kolom banyak kosong
+**Model yang rumit tidak otomatis menang.** Dengan setelan default, XGBoost, LightGBM, dan Random Forest semuanya di kisaran 24–25% MAPE, hampir sama dengan Ridge biasa (24,6%). Tuning menurunkannya ke ±22%. Artinya yang paling membatasi di sini adalah informasi di data, bukan algoritmanya.
 
-## 7. Cara menjalankan (isi di akhir)
-## 8. Hasil model (isi di akhir)
+**Bentuk fitur penting untuk model linear.** Ridge dengan luas tanah/bangunan apa adanya menghasilkan tebakan yang meledak (R² −1.663). Setelah fitur yang miring di-log, MAPE-nya turun ke 24,6%. Masuk akal: harga rumah naik secara persentase terhadap luas, bukan bertambah rupiah tetap per m².
+
+**Nilai kosong ternyata membawa informasi.** Rumah tanpa keterangan sertifikat punya median harga hampir 2× lipat rumah yang terisi. Karena itu nilai kosong tidak diisi modus, tetapi diberi label sendiri ("tidak diketahui").
+
+**Rata-rata error menyembunyikan cerita.** Di Bogor, MAPE 21% tapi median melesetnya 11%, paling akurat dari semua kota. Kebanyakan rumah ditebak dengan baik, tapi ada beberapa yang meleset lebih dari 100%. Kota tersulit adalah Jakarta Selatan dan Jakarta Pusat. Untuk Jakarta Pusat, datanya juga terlalu sedikit (8 rumah di test).
+
+**Yang paling menentukan harga adalah luas bangunan dan luas tanah** (berdasarkan SHAP), jauh di atas fitur lain. Lokasi menyusul: rumah di Bogor, misalnya, ditaksir sekitar 14% lebih murah dibanding rumah sejenis di tempat lain.
+
+## Alur kerja
+
+| Notebook | Isi |
+|---|---|
+| `01_Data_Exploration` | Mencari masalah di data mentah |
+| `02_Cleaning` | Aturan pembersihan; 3.553 → 3.172 baris |
+| `03_EDA` | Distribusi harga, korelasi, pengaruh lokasi, pola nilai kosong |
+| `04_Feature_Engineering` | Split per grup, isi nilai kosong dari train saja, one-hot encoding |
+| `05_Modelling` | Baseline, model pohon, tuning (RandomizedSearchCV + GroupKFold) |
+| `06_Evaluation` | Analisis error dan SHAP |
+
+Beberapa keputusan di cleaning:
+- Kos, hotel, guest house, oper kredit, dan lelang dibuang karena harganya bukan harga rumah tinggal di pasar.
+- Satu listing seharga 580 miliar dibuang. Rumah dengan cluster dan ukuran yang persis sama diiklankan 5,8 miliar, jadi hampir pasti kelebihan dua nol.
+- `lat`/`long` tidak dipakai. Ternyata isinya hanya titik tengah kecamatan, dan sebagian bahkan jatuh di Cirebon dan Jawa Tengah.
+
+Target dilatih dalam bentuk log karena harganya sangat miring (median 1,56 M, rata-rata 4,08 M).
+
+## Keterbatasan
+
+- Harga yang dipakai adalah harga iklan 2022, bukan harga transaksi.
+- Lokasi hanya sampai level kecamatan. Dua rumah di kecamatan yang sama bisa beda jauh harganya karena jalan, akses, atau lingkungan, dan informasi itu tidak ada di data.
+- Model pohon tidak bisa menaksir di atas harga tertinggi yang pernah dilihatnya, jadi rumah super mewah cenderung ditaksir terlalu rendah.
+- Sebagian rumah meleset lebih dari 100%, dan penyebabnya (data iklan yang salah atau model yang salah) belum diselidiki satu per satu.
+
+## Menjalankan
+
+```bash
+conda create -n rumah-jaboretabek python=3.11
+conda activate rumah-jaboretabek
+python -m pip install pandas numpy scikit-learn xgboost lightgbm shap seaborn matplotlib joblib jupyter
+```
+
+Jalankan notebook berurutan dari `01` sampai `06`. Data mentah ada di `data/raw/`, hasil olahan disimpan ke `data/processed/`, dan model ke `models/`.
